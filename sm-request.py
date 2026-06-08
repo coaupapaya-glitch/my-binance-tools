@@ -2,28 +2,33 @@ import requests
 import csv
 from datetime import datetime
 
-url = "https://www.binance.com/bapi/futures/v1/public/future/smart-money/signal/overview"
-
-params = {"symbol": "BTCUSDT"}
+# 关键改动：使用全球公共代理转发，完美绕过美国 IP 的 451 封锁
+# 每次请求会随机通过欧洲、亚太等不限制币安的节点转发
+url = "https://api.allorigins.win/get"
+target_url = "https://www.binance.com/bapi/futures/v1/public/future/smart-money/signal/overview?symbol=BTCUSDT"
 
 headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Referer": "https://www.binance.com/zh-CN/smart-money/signal/BTCUSDT"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 }
 
 csv_path = "btc_smart_money_overview.csv"
 
-print("正在获取最新数据...")
+print("正在通过云端中转代理获取最新数据...")
 
 try:
-    resp = requests.get(url, params=params, headers=headers, timeout=10)
+    # 1. 通过代理网关发起请求
+    resp = requests.get(url, params={"url": target_url}, headers=headers, timeout=15)
     resp.raise_for_status()
     
-    json_data = resp.json()
-    if not json_data.get("success"):
-        print("接口返回失败:", json_data.get("message"))
-        exit()
+    # 2. 代理服务会将原 JSON 嵌套在 "contents" 字段里，需要二次解析
+    wrapper_data = resp.json()
+    import json
+    json_data = json.loads(wrapper_data["contents"])
     
+    if not json_data.get("success"):
+        print("币安接口返回失败:", json_data.get("message"))
+        exit()
+        
     data = json_data["data"]
     
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -35,7 +40,7 @@ try:
     # 名义多空比率（服务器直接提供）
     long_short_ratio = round(data["longShortRatio"] * 100, 2)
     
-    # 输出到控制台（英文 + 中文对照）
+    # 输出到控制台
     print(f"\n[{now}] 数据获取成功：")
     print(f"Total Traders: {data['totalTraders']}")
     print(f"Long Short Ratio (%): {long_short_ratio}")
@@ -61,7 +66,7 @@ try:
         round(data["totalPositions"], 2)
     ]
     
-    with open(csv_path, "a", newline="", encoding="utf-8-sig") as f:  # utf-8-sig 让 Excel 正确识别
+    with open(csv_path, "a", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         if f.tell() == 0:  # 文件为空时写表头
             writer.writerow([
@@ -77,7 +82,7 @@ try:
                 "Total Positions (USDT)"
             ])
         writer.writerow(row)
-    
+        
     print(f"\n数据已追加保存到：{csv_path}")
     
 except Exception as e:
