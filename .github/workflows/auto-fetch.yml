@@ -1,0 +1,35 @@
+name: Binance Smart Money Auto Fetcher
+
+on:
+  schedule:
+    - cron: '0 */1 * * *'
+  workflow_dispatch:
+
+jobs:
+  fetch_job:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 1. Checkout code
+      uses: actions/checkout@v3
+
+    - name: 2. Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: 3. Install dependencies
+      run: |
+        pip install requests
+
+    - name: 4. Run script
+      run: |
+        python sm-request.py
+
+    - name: 5. Push changes
+      run: |
+        git config --local user.email "actions@github.com"
+        git config --local user.name "GitHub Actions"
+        git add btc_smart_money_overview.csv || echo "No changes"
+        git commit -m "Auto update data: $(date)" || exit 0
+        git push
