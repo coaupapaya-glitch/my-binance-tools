@@ -1,93 +1,84 @@
-import streamlit as st
-import pandas as pd
 import requests
-from datetime import datetime, timedelta
+import csv
+from datetime import datetime
 
-st.set_page_config(page_title="Smart Money 数据监控", layout="wide")
-st.title("📊 Binance Smart Money 历史数据监控 (BTCUSDT)")
-st.caption("数据来自 Binance 官方公开接口 • 云端稳定运行 • 自动转换为北京时间")
+url = "https://www.binance.com/bapi/futures/v1/public/future/smart-money/signal/overview"
 
-# ==================== 初始化云端会话内存 ====================
-# 用 st.session_state 代替本地 CSV 文件，用于在网页运行期间累加历史数据
-if "history_df" not in st.session_state:
-    st.session_state.history_df = pd.DataFrame(columns=[
-        "Timestamp", "Symbol", "Period", "Long Ratio (%)", "Short Ratio (%)", "Long Short Ratio"
-    ])
+params = {"symbol": "BTCUSDT"}
 
-# ==================== 数据获取函数 ====================
-@st.cache_data(ttl=30)
-def get_smart_money_data():
-    # 使用公开的 fapi 接口，避免云端服务器被币安 BAPI 封禁 403
-    url = "https://fapi.binance.com/fapi/v1/topLongShortPositionRatio"
-    params = {"symbol": "BTCUSDT", "period": "5m", "limit": 1}
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
-        resp.raise_for_status()
-        json_data = resp.json()
-        if json_data and len(json_data) > 0:
-            return json_data[0]
-        return None
-    except Exception as e:
-        st.error(f"⚠️ 无法从币安服务器获取数据: {e}")
-        return None
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Referer": "https://www.binance.com/zh-CN/smart-money/signal/BTCUSDT"
+}
 
-# ==================== 业务逻辑处理 ====================
-data = get_smart_money_data()
+csv_path = "btc_smart_money_overview.csv"
 
-if data:
-    # 转换为北京时间
-    now_bj = datetime.utcnow() + timedelta(hours=8)
-    now_str = now_bj.strftime("%Y-%m-%d %H:%M:%S")
+print("正在获取最新数据...")
+
+try:
+    resp = requests.get(url, params=params, headers=headers, timeout=10)
+    resp.raise_for_status()
     
-    # 解析字段
-    long_ratio = round(float(data["longAccount"]) * 100, 2)
-    short_ratio = round(float(data["shortAccount"]) * 100, 2)
-    ls_ratio = round(float(data["longShortRatio"]), 2)
+    json_data = resp.json()
+    if not json_data.get("success"):
+        print("接口返回失败:", json_data.get("message"))
+        exit()
     
-    # 构造当前这一行的新数据
-    new_row = {
-        "Timestamp": now_str,
-        "Symbol": data["symbol"],
-        "Period": data["period"],
-        "Long Ratio (%)": long_ratio,
-        "Short Ratio (%)": short_ratio,
-        "Long Short Ratio": ls_ratio
-    }
+    data = json_data["data"]
     
-    # 💡 模拟本地 CSV 追加：如果当前时间的数据不在历史记录里，就追加进去
-    if st.session_state.history_df.empty or st.session_state.history_df.iloc[-1]["Timestamp"] != now_str:
-        st.session_state.history_df = pd.concat([st.session_state.history_df, pd.DataFrame([new_row])], ignore_index=True)
-
-    # ---- 界面渲染 ----
-    # 1. 仪表盘大数字
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("最新多空比 (Long/Short)", f"{ls_ratio}")
-    with col2:
-        st.metric("大户多头比例", f"{long_ratio}%")
-    with col3:
-        st.metric("大户空头比例", f"{short_ratio}%")
-        
-    st.markdown("---")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # 2. 历史表格展示 (最新获取的数据排在最上面)
-    st.subheader("📋 运行期间累计历史数据 (等同于你的本地 CSV 记录)")
-    display_df = st.session_state.history_df.iloc[::-1] # 倒序排列方便查看最新行
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
+    # 计算盈利比例（只用普通交易员）
+    long_profit_ratio = round(data["longProfitTraders"] / data["longTraders"] * 100, 2) if data["longTraders"] > 0 else "N/A"
+    short_profit_ratio = round(data["shortProfitTraders"] / data["shortTraders"] * 100, 2) if data["shortTraders"] > 0 else "N/A"
     
-    # 3. 导出 CSV 按钮
-    st.download_button(
-        label="📥 导出当前累计的全部数据为 CSV (Excel不乱码)",
-        data=st.session_state.history_df.to_csv(index=False).encode('utf-8-sig'),
-        file_name=f"binance_history_{now_bj.strftime('%Y%m%d_%H%M')}.csv",
-        mime="text/csv"
-    )
-
-else:
-    st.warning("正在等待数据加载...")
-
-# 手动强刷按钮
-if st.button("🔄 手动同步并追加最新数据"):
-    st.cache_data.clear()
-    st.rerun()
+    # 名义多空比率（服务器直接提供）
+    long_short_ratio = round(data["longShortRatio"] * 100, 2)
+    
+    # 输出到控制台（英文 + 中文对照）
+    print(f"\n[{now}] 数据获取成功：")
+    print(f"Total Traders: {data['totalTraders']}")
+    print(f"Long Short Ratio (%): {long_short_ratio}")
+    print(f"Long Traders: {data['longTraders']}")
+    print(f"Long Profit Traders: {data['longProfitTraders']}")
+    print(f"Long Profit Ratio (%): {long_profit_ratio}")
+    print(f"Short Traders: {data['shortTraders']}")
+    print(f"Short Profit Traders: {data['shortProfitTraders']}")
+    print(f"Short Profit Ratio (%): {short_profit_ratio}")
+    print(f"Total Positions (USDT): {data['totalPositions']:,.2f}")
+    
+    # 追加保存到 CSV（用 utf-8-sig 防乱码 + 全英文表头）
+    row = [
+        now,
+        data["totalTraders"],
+        long_short_ratio,
+        data["longTraders"],
+        data["longProfitTraders"],
+        long_profit_ratio,
+        data["shortTraders"],
+        data["shortProfitTraders"],
+        short_profit_ratio,
+        round(data["totalPositions"], 2)
+    ]
+    
+    with open(csv_path, "a", newline="", encoding="utf-8-sig") as f:  # utf-8-sig 让 Excel 正确识别
+        writer = csv.writer(f)
+        if f.tell() == 0:  # 文件为空时写表头
+            writer.writerow([
+                "Timestamp",
+                "Total Traders",
+                "Long Short Ratio (%)",
+                "Long Traders",
+                "Long Profit Traders",
+                "Long Profit Ratio (%)",
+                "Short Traders",
+                "Short Profit Traders",
+                "Short Profit Ratio (%)",
+                "Total Positions (USDT)"
+            ])
+        writer.writerow(row)
+    
+    print(f"\n数据已追加保存到：{csv_path}")
+    
+except Exception as e:
+    print(f"获取失败: {e}")
